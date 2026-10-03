@@ -170,8 +170,8 @@ QIIFA_TARGET_BASH_CONFIG_FILEPATH="$QCPATH/QIIFA-cmd-vendor/qiifa_bash_configs"
 QIIFA_FRAMEWORK_BASH_CONFIG_FILEPATH="$QCPATH/commonsys-intf/QIIFA-fwk/qiifa_config/qiifa_bash_configs"
 
 # Pipeline stage selector.  Comma-separated list of stages to execute.
-# Only consulted when ENABLE_PREBUILD_STAGES=true (see below); otherwise this
-# value is inert and the full build always runs.
+# Only consulted when ENABLE_CENTRALIZED_FEATURE_CONTROL=true (see below);
+# otherwise this value is inert and the full build always runs.
 # Default is "all": the full build.
 # Set to a specific stage or combination to run only those stages.
 #   all       - full build (same as not specifying --stages)
@@ -180,20 +180,13 @@ QIIFA_FRAMEWORK_BASH_CONFIG_FILEPATH="$QCPATH/commonsys-intf/QIIFA-fwk/qiifa_con
 # Set via --stages=<value>.
 PREBUILD_STAGES=all
 
-# Master switch for the --stages framework (default false).
-#   ENABLE_PREBUILD_STAGES             -> the --stages mechanism itself
-#   ENABLE_CENTRALIZED_FEATURE_CONTROL -> CFC business logic only
-# The two are independent. When this is false, the block below is
-# skipped wholesale and build.sh behaves exactly as before -- zero impact.
-ENABLE_PREBUILD_STAGES=false
-
 # CFC-namespaced parameters, consumed by run_cfc_setup.
 # Set via --cfc.<key>=<value>.
 CFC_PROFILE=default
 
-# CFC master switch.
-# Default false. To enable CFC: change to true.
-ENABLE_CENTRALIZED_FEATURE_CONTROL=false
+# CFC master switch.  Set and exported by core-utils/vendorsetup.sh; the
+# expansion below only supplies a default if that was never sourced.
+ENABLE_CENTRALIZED_FEATURE_CONTROL=${ENABLE_CENTRALIZED_FEATURE_CONTROL:-false}
 
 # run_cfc_setup [side] [profile]
 #   side:    "qssi" | "vendor" | "" (auto-detect from TARGET_BOARD_PLATFORM)
@@ -285,9 +278,9 @@ while [[ $# -gt 0 ]]
             shift
             ;;
         --stages=*)
-            # Parse only when the stages framework is on; otherwise this arg
+            # Parse only when CFC is on; otherwise this arg
             # falls through exactly as it would if --stages never existed.
-            if [ "$ENABLE_PREBUILD_STAGES" = true ]; then
+            if [ "$ENABLE_CENTRALIZED_FEATURE_CONTROL" = true ]; then
                 PREBUILD_STAGES="${arg#--stages=}"
             else
                 MAKE_ARGUMENTS+=("$1")
@@ -316,30 +309,22 @@ while [[ $# -gt 0 ]]
 done
 set -- "${MAKE_ARGUMENTS[@]}" # restore the argument list ($@) to be set to MAKE_ARGUMENTS
 
-# partial path: gated on ENABLE_PREBUILD_STAGES=true AND --stages != all.
-# When both hold, run only the requested stages and then exit. 
+# partial path: gated on ENABLE_CENTRALIZED_FEATURE_CONTROL=true AND --stages != all.
+# When both hold, run only the requested stages and then exit.
 # This path does not depend on lunch having run, but
 # individual stages may still require specific env vars that lunch normally
 # sets (e.g. the cfc stage requires TARGET_BOARD_PLATFORM to be exported).
 #
-# When ENABLE_PREBUILD_STAGES is off (default), this block is skipped
-# wholesale -- no stage parsing -- so build.sh is byte-for-byte equivalent to
-# its pre-stage behavior regardless of any --stages argument. --stages=all
-# likewise preserves existing build behavior unchanged.
-#
-# Each stage decides for itself whether it is enabled. The cfc stage is
-# gated on the CFC master switch: when it is off, the stage is a no-op, so
-# an explicit --stages=cfc never turns into an unexpected full build or a
-# lunch-required error. Other (future) stages are unaffected by the CFC
-# switch.
-if [ "$ENABLE_PREBUILD_STAGES" = true ] && [ "$PREBUILD_STAGES" != all ]; then
+# When the switch is off, this block is skipped wholesale -- no stage parsing --
+# so build.sh behaves as it did before CFC. Note that a --stages argument
+# passed while the switch is off is not recognised as a stage: it reaches make
+# as an ordinary argument, and make rejects it.
+if [ "$ENABLE_CENTRALIZED_FEATURE_CONTROL" = true ] && [ "$PREBUILD_STAGES" != all ]; then
     IFS=',' read -ra _stage_list <<< "$PREBUILD_STAGES"
     for _stage in "${_stage_list[@]}"; do
         case "$_stage" in
             cfc)
-                if [ "$ENABLE_CENTRALIZED_FEATURE_CONTROL" = true ]; then
-                    run_cfc_setup "" "$CFC_PROFILE" || exit $?
-                fi
+                run_cfc_setup "" "$CFC_PROFILE" || exit $?
                 ;;
             # future stages: xyz) run_xyz || exit $? ;;
             *)
@@ -437,7 +422,7 @@ ENABLE_VIRTUAL_AB=false
 
 # use these lists to pair target lunch options with their corresponding qssi type.
 TARGET_PRODUCT_MAPPING_QSSI=("holi" "taro" "kalama" "lahaina" "sdm710" "sdm845" "msmnile" "sm6150" "kona" "atoll" "trinket" "lito" "bengal" "qssi" "parrot" "bengal_515" "bengal_515s" "crow" "anorak")
-TARGET_PRODUCT_MAPPING_QSSI_64=("kalama64" "pineapple" "blair" "hala" "sun" "qssi_64" "niobe" "parrot66" "volcano" "canoe" "chora" "malabar" "pitti" "lahaina612" "art" "shikra_64" "bengal_612" "bengal_612s" "hamoa_la" "honu" "taro612")
+TARGET_PRODUCT_MAPPING_QSSI_64=("kalama64" "pineapple" "blair" "hala" "sun" "qssi_64" "niobe" "parrot66" "volcano" "canoe" "chora" "malabar" "pitti" "lahaina612" "art" "shikra_64" "bengal_612" "bengal_612k" "bengal_612s" "hamoa_la" "honu" "taro612")
 TARGET_PRODUCT_MAPPING_QSSI_64GO=( "qssi_64go" "shikra_64go")
 TARGET_PRODUCT_MAPPING_QSSI_WEAR=("qssi_wear" "monaco_aon_64" "vienna64")
 TARGET_PRODUCT_MAPPING_QSSI_32=("bengal_32" "qssi_32")
@@ -478,9 +463,9 @@ DIST_DIR="out/dist"
 MERGED_TARGET_FILES="$DIST_DIR/merged-${TARGET_MATCHING_QSSI}_${TARGET_PRODUCT}-target_files.zip"
 LEGACY_TARGET_FILES="$DIST_DIR/${TARGET_PRODUCT}-target_files-*.zip"
 MERGED_OTA_ZIP="$DIST_DIR/merged-${TARGET_MATCHING_QSSI}_${TARGET_PRODUCT}-ota.zip"
-DIST_ENABLED_TARGET_LIST=("holi" "taro" "kalama" "parrot" "kalama64" "pineapple" "blair" "sun" "lahaina" "kona" "sdm710" "sdm845" "msmnile" "sm6150" "trinket" "lito" "bengal" "atoll" "qssi" "qssi_64" "qssi_64go" "qssi_32" "qssi_32go" "bengal_32" "bengal_32go" "sdm660_64" "msm8937_lily" "bengal_515" "bengal_515_32go" "monaco" "crow" "niobe" "anorak" "parrot66" "volcano" "canoe" "chora" "malabar" "vienna" "qssi_wear" "monaco_aon_64" "pitti" "pitti_32go" "vienna64" "lahaina612" "art" "bengal_515s" "bengal_515s_32go" "qssi_tiny" "qssi_tiny_32go" "bengal_515tiny" "bengal_515tiny_32go" "shikra_64" "shikra_64go" "shikra_tiny_32go" "bengal_612" "bengal_612s" "bengal_612tiny" "bengal_612_32go" "bengal_612s_32go" "bengal_612tiny_32go" "hamoa_la" "honu" "taro612")
-VIRTUAL_AB_ENABLED_TARGET_LIST=("kona" "lito" "taro" "kalama" "parrot" "kalama64" "pineapple" "blair" "sun" "lahaina" "bengal_515" "bengal_515_32go" "crow" "niobe" "anorak" "parrot66" "volcano" "monaco" "canoe" "chora" "malabar" "vienna" "monaco_aon_64" "pitti" "pitti_32go" "vienna64" "lahaina612" "art" "bengal_515s" "bengal_515s_32go" "bengal_515tiny" "bengal_515tiny_32go" "shikra_64" "shikra_64go" "shikra_tiny_32go" "bengal_612" "bengal_612s" "bengal_612tiny" "bengal_612_32go" "bengal_612s_32go" "bengal_612tiny_32go" "hamoa_la" "honu" "taro612")
-DYNAMIC_PARTITION_ENABLED_TARGET_LIST=("holi" "taro" "kalama" "parrot" "kalama64" "pineapple" "blair" "sun" "lahaina" "kona" "msmnile" "sdm710" "lito" "trinket" "atoll" "qssi" "qssi_64" "qssi_64go" "qssi_32" "qssi_32go" "bengal" "bengal_32" "bengal_32go" "sm6150" "sdm660_64" "msm8937_lily" "bengal_515" "bengal_515_32go" "monaco" "crow" "niobe" "anorak" "parrot66" "volcano" "canoe" "chora" "malabar" "vienna" "qssi_wear" "monaco_aon_64" "pitti" "pitti_32go" "vienna64" "lahaina612" "art" "bengal_515s" "bengal_515s_32go" "qssi_tiny" "qssi_tiny_32go" "bengal_515tiny" "bengal_515tiny_32go" "shikra_64" "shikra_64go" "shikra_tiny_32go" "bengal_612" "bengal_612s" "bengal_612tiny" "bengal_612_32go" "bengal_612s_32go" "bengal_612tiny_32go" "hamoa_la" "honu" "taro612")
+DIST_ENABLED_TARGET_LIST=("holi" "taro" "kalama" "parrot" "kalama64" "pineapple" "blair" "sun" "lahaina" "kona" "sdm710" "sdm845" "msmnile" "sm6150" "trinket" "lito" "bengal" "atoll" "qssi" "qssi_64" "qssi_64go" "qssi_32" "qssi_32go" "bengal_32" "bengal_32go" "sdm660_64" "msm8937_lily" "bengal_515" "bengal_515_32go" "monaco" "crow" "niobe" "anorak" "parrot66" "volcano" "canoe" "chora" "malabar" "vienna" "qssi_wear" "monaco_aon_64" "pitti" "pitti_32go" "vienna64" "lahaina612" "art" "bengal_515s" "bengal_515s_32go" "qssi_tiny" "qssi_tiny_32go" "bengal_515tiny" "bengal_515tiny_32go" "shikra_64" "shikra_64go" "shikra_tiny_32go" "bengal_612" "bengal_612k" "bengal_612s" "bengal_612tiny" "bengal_612_32go" "bengal_612s_32go" "bengal_612tiny_32go" "hamoa_la" "honu" "taro612")
+VIRTUAL_AB_ENABLED_TARGET_LIST=("kona" "lito" "taro" "kalama" "parrot" "kalama64" "pineapple" "blair" "sun" "lahaina" "bengal_515" "bengal_515_32go" "crow" "niobe" "anorak" "parrot66" "volcano" "monaco" "canoe" "chora" "malabar" "vienna" "monaco_aon_64" "pitti" "pitti_32go" "vienna64" "lahaina612" "art" "bengal_515s" "bengal_515s_32go" "bengal_515tiny" "bengal_515tiny_32go" "shikra_64" "shikra_64go" "shikra_tiny_32go" "bengal_612" "bengal_612k" "bengal_612s" "bengal_612tiny" "bengal_612_32go" "bengal_612s_32go" "bengal_612tiny_32go" "hamoa_la" "honu" "taro612")
+DYNAMIC_PARTITION_ENABLED_TARGET_LIST=("holi" "taro" "kalama" "parrot" "kalama64" "pineapple" "blair" "sun" "lahaina" "kona" "msmnile" "sdm710" "lito" "trinket" "atoll" "qssi" "qssi_64" "qssi_64go" "qssi_32" "qssi_32go" "bengal" "bengal_32" "bengal_32go" "sm6150" "sdm660_64" "msm8937_lily" "bengal_515" "bengal_515_32go" "monaco" "crow" "niobe" "anorak" "parrot66" "volcano" "canoe" "chora" "malabar" "vienna" "qssi_wear" "monaco_aon_64" "pitti" "pitti_32go" "vienna64" "lahaina612" "art" "bengal_515s" "bengal_515s_32go" "qssi_tiny" "qssi_tiny_32go" "bengal_515tiny" "bengal_515tiny_32go" "shikra_64" "shikra_64go" "shikra_tiny_32go" "bengal_612" "bengal_612k" "bengal_612s" "bengal_612tiny" "bengal_612_32go" "bengal_612s_32go" "bengal_612tiny_32go" "hamoa_la" "honu" "taro612")
 DYNAMIC_PARTITIONS_IMAGES_PATH=$OUT
 DP_IMAGES_OVERRIDE=false
 TECHPACK_LIST=("camera_tp" "display_tp" "video_tp" "audio_tp" "sensors_tp" "cv_tp" "xr_tp" "btfm_tp" "wlan_tp" "hexlp_tp" "graphics_tp" "dspplatform_tp" "qacs_tp" )
